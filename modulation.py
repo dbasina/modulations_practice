@@ -78,17 +78,17 @@ class INR(nn.Module):
         self.dataset_size = dataset_size
 
         # This is where the per image latent vectors are stored and learned
-        self.embeddings = nn.Embedding(self.dataset_size, self.latent_dimensions)
-        nn.init.uniform_(self.embeddings.weight, -1e-4, 1e-4)
+        self.modulation_latent_vectors = nn.Embedding(self.dataset_size, self.latent_dimensions)
+        nn.init.uniform_(self.modulation_latent_vectors.weight, -1e-4, 1e-4)
 
         self.INR_1 = INR_Layer(input_features=input_features, output_features=hidden_features,is_first=True, omega_0=omega_0)
         self.INR_2 = INR_Layer(input_features=hidden_features, output_features=hidden_features,is_first= False, omega_0=omega_0)
         self.output_layer = nn.Linear(hidden_features, output_features)
 
     def forward(self, x,image_ids):
-        latent = self.embeddings(image_ids)
-        output_1 = self.INR_1(x, latent)
-        output_2 = self.INR_2(output_1, latent)
+        image_modulation_vector = self.modulation_latent_vectors(image_ids)
+        output_1 = self.INR_1(x, image_modulation_vector)
+        output_2 = self.INR_2(output_1, image_modulation_vector)
         output = self.output_layer(output_2)
         return output
 
