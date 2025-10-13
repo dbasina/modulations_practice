@@ -76,6 +76,8 @@ class INR(nn.Module):
         super().__init__()
         self.latent_dimensions = latent_dim
         self.dataset_size = dataset_size
+
+        # This is where the per image latent vectors are stored and learned
         self.embeddings = nn.Embedding(self.dataset_size, self.latent_dimensions)
         nn.init.uniform_(self.embeddings.weight, -1e-4, 1e-4)
 
