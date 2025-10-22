@@ -6,132 +6,94 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from torchvision.datasets import ImageFolder, MNIST
-
 from torch.utils.data import DataLoader as Dataloader
+from datasets import MNIST_coordinate_dataset
+from models import INR
+from train_utils import inner_loop, generate_samples
+from fkan_inr import FKAN_INR_Modulated
+from tqdm import tqdm
 
-class MNIST_coordinate_dataset(torch.utils.data.Dataset):
-    def __init__(self):
-        self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean = [0.5,], std= [0.5,])
-        ])
-        self.dataset = torchvision.datasets.MNIST(train = True, transform=self.transform, download=True, root = './data')
-        
-        #create grid
-        C,H,W = self.dataset[0][0].shape
-        self.x_coordinates = torch.linspace(-1,1,W)
-        self.y_coordinates = torch.linspace(-1,1,H)
-        Y_grid, X_grid = torch.meshgrid(self.y_coordinates, self.x_coordinates, indexing='ij')
-        self.grid = torch.stack((X_grid, Y_grid), dim=-1)
-        self.grid = self.grid.reshape(-1,2)
-        self.grid = self.grid.float()
-
-    def __getitem__(self, idx):
-        image, _ = self.dataset[idx]
-        intensities = image.view(-1,1).contiguous()
-        intensities = intensities.float()
-        return self.grid, intensities, idx
-    
-    def __len__(self):
-        return len(self.dataset)
-
-class INR_Layer(nn.Module):
-    def __init__(self, input_features, output_features, latent_dim = 64, is_first = False, bias = True, omega_0 = 30):
-        super().__init__()
-        self.input_features = input_features
-        self.output_features = output_features
-        self.latent_dim = latent_dim
-        self.is_first = is_first
-        self.omega_0 = omega_0
-        self.linear = nn.Linear(self.input_features,self.output_features, bias=bias)
-
-        self.scale = nn.Linear(in_features=self.latent_dim, out_features=self.output_features)
-        self.shift = nn.Linear(in_features=self.latent_dim, out_features=self.output_features)
-
-        self.init_weights()
-
-    def init_weights(self):
-        # initialization as described in the SIREN paper
-        with torch.no_grad():
-            if self.is_first:
-                self.linear.weight.uniform_(-1 / self.input_features, 1 / self.input_features)
-            else:
-                bound = math.sqrt(6 / self.input_features) / self.omega_0
-                self.linear.weight.uniform_(-bound, bound)
-
-    def forward(self, x, latent):
-        linear_output = self.omega_0 * self.linear(x)
-        sine_output = torch.sin(linear_output)
-
-        scale_modulation = self.scale(latent)
-        shift_modulation = self.shift(latent)
-        
-        scale_modulation = scale_modulation.unsqueeze(1)
-        shift_modulation = shift_modulation.unsqueeze(1)
-        modulated_output = scale_modulation*sine_output + shift_modulation
-        return modulated_output
-
-class INR(nn.Module):
-    def __init__(self,input_features=2, hidden_features = 256, output_features = 1, dataset_size = 0, latent_dim = 64, omega_0 = 30):
-        super().__init__()
-        self.latent_dimensions = latent_dim
-        self.dataset_size = dataset_size
-
-        # This is where the per image latent vectors are stored and learned
-        self.modulation_latent_vectors = nn.Embedding(self.dataset_size, self.latent_dimensions)
-        nn.init.uniform_(self.modulation_latent_vectors.weight, -1e-4, 1e-4)
-
-        self.INR_1 = INR_Layer(input_features=input_features, output_features=hidden_features,is_first=True, omega_0=omega_0)
-        self.INR_2 = INR_Layer(input_features=hidden_features, output_features=hidden_features,is_first= False, omega_0=omega_0)
-        self.output_layer = nn.Linear(hidden_features, output_features)
-
-    def forward(self, x,image_ids):
-        image_modulation_vector = self.modulation_latent_vectors(image_ids)
-        output_1 = self.INR_1(x, image_modulation_vector)
-        output_2 = self.INR_2(output_1, image_modulation_vector)
-        output = self.output_layer(output_2)
-        return output
-
+batch_size = 16
+eval_batch_size = 4
+outer_epochs = 2000
 dataset = MNIST_coordinate_dataset()
-mnist_image_coords = DataLoader(dataset, batch_size=32, shuffle=False, pin_memory=True)
-image_coordinates, intensities, id = next(iter(mnist_image_coords))
-print(image_coordinates.shape, intensities.shape)
+dataset_subset = torch.utils.data.Subset(dataset, list(range(64)))
+mnist_dataloader = DataLoader(dataset_subset, batch_size= batch_size, shuffle=False, pin_memory=True)
+mnist_eval_dataloader = DataLoader(dataset_subset, batch_size= eval_batch_size, shuffle=True, pin_memory=True)
 
-model = INR(dataset_size=len(dataset))
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+model = FKAN_INR_Modulated(2, 128, 1, 1024, 512)
+outer_optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 loss_fn = nn.MSELoss()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+outer_optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+loss_fn = nn.MSELoss()
 model.to(device)
-for epoch in range(100):
+
+
+for epoch in tqdm(range(outer_epochs)):
     model.train()
-    epoch_loss = 0
-    for coords, intensity, image_ids in mnist_image_coords:
-        coords, intensity,image_ids = coords.to(device), intensity.to(device), image_ids.to(device)
-        optimizer.zero_grad()
-        preds = model(coords, image_ids)
-        loss = loss_fn(preds, intensity)
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-    average_loss = epoch_loss/len(mnist_image_coords)
-    embeddings_std = model.embeddings.weight.std(dim=0).mean().item()
-    print(f"Epoch {epoch+1}/100, Average Loss: {average_loss}, Embeddings Std: {embeddings_std}")
 
-    if (epoch+1) % 20 == 0:
+    #inner update of modulation vectors
+    for coords, intensity, image_ids in mnist_dataloader:
+        coords, intensity, image_ids = coords.to(device), intensity.to(device), image_ids.to(device)
+        sampled_coords, sampled_intensities = generate_samples(coords, intensity, sample_size=512)
+        
+        inner_loss, modulation_vectors = inner_loop(sampled_coords, sampled_intensities, image_ids, model, loss_fn, device)
+        
+        intensity_predictions = model(coords, modulation_vectors)
+        outer_loss = loss_fn(intensity_predictions, intensity)
+
+        outer_optimizer.zero_grad()
+        outer_loss.backward()
+        outer_optimizer.step()
+    
+    if (epoch+1) % 10 == 0:
         model.eval()
-        idx = 0
-        coords, intensities, _ = dataset[idx]
-        coords, intensities = coords.unsqueeze(0).to(device), intensities.unsqueeze(0).to(device)
+
+        # get a random batch of at least 4 images
+        coords, intensity, image_ids = next(iter(mnist_eval_dataloader))  # ensure shuffle=True or build a random subset
+        coords, intensity, image_ids = coords.to(device), intensity.to(device), image_ids.to(device)
+
+        # (Optional but recommended) split support/query for eval
+        coords_s, ints_s = generate_samples(coords, intensity, sample_size=512)  # support
+        # adapt φ with grads
+        _, modulation_vectors = inner_loop(coords_s, ints_s, image_ids, model, loss_fn, device)
+
+        # predict without grads
         with torch.no_grad():
-            pred = model(coords, torch.tensor([idx], device=device))
-        pred_img = pred.view(28, 28).detach().cpu()
+            intensity_predictions = model(coords, modulation_vectors)
 
-        plt.subplot(1,2,1)
-        plt.title("Ground Truth")
-        plt.imshow(intensities.view(28, 28).cpu(), cmap='gray')
+        # reshape & visualize
+        intensity_predictions = intensity_predictions.cpu().view(-1, 1, 28, 28)
+        intensity = intensity.cpu().view(-1, 1, 28, 28)
 
-        plt.subplot(1,2,2)
-        plt.title("Reconstruction")
-        plt.imshow(pred_img, cmap='gray')
-        plt.show()
+        fig, axs = plt.subplots(4, 2, figsize=(6, 12))
+        for i in range(min(4, intensity.shape[0])):
+            axs[i, 0].imshow(intensity[i, 0], cmap='gray', vmin=0, vmax=1)
+            axs[i, 0].set_title('Ground Truth'); axs[i, 0].axis('off')
+
+            axs[i, 1].imshow(intensity_predictions[i, 0], cmap='gray', vmin=0, vmax=1)
+            axs[i, 1].set_title('Reconstruction'); axs[i, 1].axis('off')
+
+            mse = torch.mean((intensity_predictions[i] - intensity[i])**2).item()
+            psnr_value = 10 * math.log10(1.0 / (mse + 1e-12))
+            axs[i, 1].set_xlabel(f'PSNR: {psnr_value:.2f} dB')
+
+        plt.suptitle(f'Epoch {epoch} Reconstructions')
+        plt.tight_layout(); plt.show()
+    
+
+
+
+
+
+
+
+    
+    
+
+ 
+
+
 
