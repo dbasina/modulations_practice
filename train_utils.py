@@ -1,7 +1,7 @@
 import torch
 
 
-def update_modulations(coords,intensity, modulation_vectors, model, loss_fn, device, inner_learning_rate=0.1):
+def update_modulations(coords,intensity, modulation_vectors, model, loss_fn, device, inner_learning_rate=0.9):
 
     with torch.enable_grad():
         preds = model(coords, modulation_vectors)
