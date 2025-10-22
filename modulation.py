@@ -8,7 +8,6 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 from torchvision.datasets import ImageFolder, MNIST
 from torch.utils.data import DataLoader as Dataloader
 from datasets import MNIST_coordinate_dataset
-from models import INR
 from train_utils import inner_loop, generate_samples
 from fkan_inr import FKAN_INR_Modulated
 from tqdm import tqdm
