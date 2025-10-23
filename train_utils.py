@@ -1,13 +1,13 @@
 import torch
 
 
-def update_modulations(coords,intensity, modulation_vectors, model, loss_fn, device, inner_learning_rate=0.9):
+def update_modulations(coords,intensity, modulation_vectors, model, loss_fn, device, inner_learning_rate=0.01):
 
     with torch.enable_grad():
         preds = model(coords, modulation_vectors)
         loss = loss_fn(preds, intensity)
         #compute gradients for modulation vectors only
-        (modulation_loss_gradients,) = torch.autograd.grad(loss, (modulation_vectors,), create_graph=True)
+        (modulation_loss_gradients,) = torch.autograd.grad(loss*len(intensity), (modulation_vectors,), create_graph=True)
 
         #update modulation vectors with gradient descent step
         modulation_vectors = modulation_vectors - (inner_learning_rate * modulation_loss_gradients)

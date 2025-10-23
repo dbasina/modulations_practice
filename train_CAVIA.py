@@ -48,7 +48,7 @@ for epoch in tqdm(range(outer_epochs)):
         outer_loss.backward()
         outer_optimizer.step()
     
-    if (epoch + 1) % 1000 == 0:
+    if (epoch + 1) % 100 == 0:
         model.eval()
 
         # ---- fetch a random eval batch ----
